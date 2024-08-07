@@ -1,6 +1,67 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+
+def t_h0(x):    return torch.ones(x.shape).to(x.device)
+
+def t_h1(x):    return x
+
+def t_h2(x):    return (torch.pow(x, 2) - 1)/np.sqrt(np.math.factorial(2))
+
+def t_h3(x):
+    a = (torch.pow(x, 3) - 3*x)/np.sqrt(np.math.factorial(3))
+    return a
+
+def t_h4(x):    return (torch.pow(x, 4) - 6*torch.pow(x, 2) + 3)/np.sqrt(np.math.factorial(4))
+
+def t_h5(x):    return (torch.pow(x, 5) - 10*torch.pow(x, 3) + 15*x)/np.sqrt(np.math.factorial(5))
+
+def t_h6(x): return (torch.pow(x, 6) - 15*torch.pow(x, 4) + 45*torch.pow(x,2) - 15)/np.sqrt(np.math.factorial(6))
+
+def t_h7(x): return (torch.pow(x,7) - 21*torch.pow(x,5) + 105*torch.pow(x,3) - 105*x)/np.sqrt(np.math.factorial(7))
+
+def t_h8(x): return (torch.pow(x,8) - 28*torch.pow(x,6) + 210*torch.pow(x,4) - 420*torch.pow(x,2) + 105)/np.sqrt(np.math.factorial(8))
+
+def t_h9(x): return (torch.pow(x,9) - 36*torch.pow(x,7) + 378*torch.pow(x,5) - 1260*torch.pow(x,3) + 945*x)/np.sqrt(np.math.factorial(9))
+
+def t_h10(x): return (torch.pow(x,10) - 45*torch.pow(x,8) + 630*torch.pow(x,6) - 3150*torch.pow(x,4) + 4725*torch.pow(x,2) - 945)/np.sqrt(np.math.factorial(10))
+
+TORCH_HERMITE_POLYS = [t_h0, t_h1, t_h2, t_h3, t_h4, t_h5, t_h6, t_h7, t_h8, t_h9, t_h10]
+
+class hermite_poly_act(torch.nn.Module):
+    def __init__(self, order, params, is_global=False):
+        super().__init__()
+        self.order = order
+        self.params = params
+        
+        # param is trainable
+        #self.params = torch.nn.Parameter(torch.tensor(params, dtype=torch.float))
+        
+        self.is_global = is_global
+        
+    def t_hermite_poly(self, x):
+        eval = torch.zeros(x.shape).to(x.device)
+        for i in range(self.order+1):
+            eval += self.params[i]*TORCH_HERMITE_POLYS[i](x)
+        return eval
+
+    def forward(self, x):
+        if self.is_global:
+            return self.t_hermite_poly(x)
+        else:
+            input_shape = x.shape
+            res = x.view(input_shape[0], -1)
+            res_copy = torch.clone(res)
+            x1 = (torch.pow(res_copy, 3) - 3*res_copy)/np.sqrt(np.math.factorial(3)) + (torch.pow(res_copy, 2) - 1)/np.sqrt(np.math.factorial(2)) + res_copy + 1
+            x2 = (torch.pow(res_copy, 2) - 1)/np.sqrt(np.math.factorial(2))
+            x3 = res_copy
+            x4 = torch.ones(x1.shape).cuda()
+            output = torch.stack((x1, x2, x3, x4), dim=2)
+            newparams = torch.stack([self.params] * x1.shape[0], dim=0)
+            zoutput = (output * newparams).to(torch.float32)
+            zoutput = torch.sum(zoutput, dim=2)
+            return zoutput.view(input_shape)
 
 def benchmark_mode(flag):
     torch.backends.cudnn.benchmark = flag
@@ -8,12 +69,12 @@ def benchmark_mode(flag):
     
 class ResNetBasicblock(nn.Module):
     expansion = 1
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
+    def __init__(self, inplanes, planes, stride=1, params=None, downsample=None):
         super(ResNetBasicblock, self).__init__()
 
         self.conv_a = nn.Conv2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn_a = nn.BatchNorm2d(planes)
-
+        self.hermite = hermite_poly_act(2, params, True)
         self.conv_b = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn_b = nn.BatchNorm2d(planes)
 
@@ -26,7 +87,7 @@ class ResNetBasicblock(nn.Module):
 
         basicblock = self.conv_a(x)
         basicblock = self.bn_a(basicblock)
-        basicblock = basicblock.relu_()
+        basicblock = self.hermite(basicblock) #basicblock.relu_()
 
         basicblock = self.conv_b(basicblock)
         basicblock = self.bn_b(basicblock)
@@ -304,7 +365,7 @@ class CifarResNet(nn.Module):
     https://arxiv.org/abs/1512.03385.pdf
     """
 
-    def __init__(self, block, depth, num_classes):
+    def __init__(self, block, depth, num_classes, params):
         """ Constructor
         Args:
           depth: number of layers.
@@ -323,13 +384,13 @@ class CifarResNet(nn.Module):
         self.bn_1 = nn.BatchNorm2d(16)
 
         self.inplanes = 16
-        self.stage_1 = self._make_layer(block, 16, layer_blocks, 1)
-        self.stage_2 = self._make_layer(block, 32, layer_blocks, 2)
-        self.stage_3 = self._make_layer(block, 64, layer_blocks, 2)
+        self.stage_1 = self._make_layer(block, 16, layer_blocks, params, 1)
+        self.stage_2 = self._make_layer(block, 32, layer_blocks, params, 2)
+        self.stage_3 = self._make_layer(block, 64, layer_blocks, params, 2)
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Linear(64 * block.expansion, num_classes)
 
-    def _make_layer(self, block, planes, blocks, stride=1):
+    def _make_layer(self, block, planes, blocks, params, stride=1):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
@@ -339,17 +400,20 @@ class CifarResNet(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
+        layers.append(block(self.inplanes, planes, stride, params, downsample))
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
+            layers.append(block(self.inplanes, planes, 1, params))
 
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        # 前三层不变
         x = self.conv_1_3x3(x)
         x = self.bn_1(x)
         x = x.relu_()
+
+        # 每个block里面替换激活函数
         x = self.stage_1(x)
         x = self.stage_2(x)
         x = self.stage_3(x)

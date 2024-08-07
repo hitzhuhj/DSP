@@ -1,5 +1,6 @@
 import os
 import math
+import pickle  
 import copy
 import torchvision.datasets as dsets
 import torchvision.transforms as transforms
@@ -16,25 +17,29 @@ warnings.warn = warn
 benchmark_mode(True)
 
 parser = argparse.ArgumentParser(description='CIFAR-10 ResNet Training')
-parser.add_argument('--save_dir', type=str, default='./cifarmodel/', help='Folder to save checkpoints and log.')
+parser.add_argument('--save_dir', type=str, default='./checkpoints/resnet18-70/', help='Folder to save checkpoints and log.')
 parser.add_argument('-l', '--layers', default=20, type=int, metavar='L', help='number of ResNet layers')
-parser.add_argument('-d', '--device', default='0', type=str, metavar='D', help='main device (default: 0)')
+parser.add_argument('-d', '--device', default='5', type=str, metavar='D', help='main device (default: 0)')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='J', help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=400, type=int, metavar='E', help='number of total epochs to run')
+parser.add_argument('--epochs', default=600, type=int, metavar='E', help='number of total epochs to run')
 parser.add_argument('-b', '--batch-size', default=128, type=int, metavar='B', help='mini-batch size')
 parser.add_argument('--lr', '--learning-rate', default=0.015, type=float, metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
-parser.add_argument('--weight-decay', '--wd', default=1e-3, type=float, metavar='W', help='weight decay')
+parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float, metavar='W', help='weight decay')
 
 # Fine-tuning Hyperparameters
-parser.add_argument('-c', '--cycles', default=5, type=int, metavar='C', help='number of cyclic iterations')
+parser.add_argument('-c', '--cycles', default=3, type=int, metavar='C', help='number of cyclic iterations')
 parser.add_argument('-g', '--groups', default=4, type=int, metavar='G', help='number of groups')
-parser.add_argument('-p', '--prune', default=0.5, type=float, metavar='P', help='pruning rates)')
+parser.add_argument('-p', '--prune', default=0.7, type=float, metavar='P', help='pruning rates)')
 
 args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"]=args.device
 
-
+def load_variavle(filename):
+    f = open(filename,"rb")
+    r = pickle.load(f)
+    f.close()
+    return r
 
 def get_lr(optimizer):
     return [param_group['lr'] for param_group in optimizer.param_groups]
@@ -68,8 +73,11 @@ def train(network):
 
     cnn, netname = network
     config = netname
-    savepath = args.save_dir+'/'+netname+'_P%sg%dc%.2f.pkl'%(args.device, args.groups, args.prune)
-    loadpath = args.save_dir+'/'+netname+'_G%sg%d.pkl'%(args.device, args.groups)
+    savepath = args.save_dir+netname+'_P%sg%dc%.2f.pkl'%(args.device, args.groups, args.prune)
+    #loadpath = args.save_dir+netname+'_G%sg%d.pkl'%(args.device, args.groups)
+    loadpath = '/home/zhuhongjia/project/DSP/checkpoints/resnet20_G0g4.pkl'
+
+
     state_dict, baseacc = torch.load(loadpath)
     print(loadpath)
     print(baseacc)
@@ -136,7 +144,9 @@ def train(network):
     return bestset['acc']
 
 def resnet(layers):
-    return CifarResNet(ResNetBasicblock, layers, 10).to(device), "resnet"+str(layers)
+    hermite_fit_params_path = '/home/zhuhongjia/SSD/D2B/relu/2orderHermite_relu_4.pkl'
+    hermite_params = load_variavle(hermite_fit_params_path)
+    return CifarResNet(ResNetBasicblock, layers, 10, hermite_params).to(device), "resnet"+str(layers)
 
 if __name__ == '__main__':
     train(resnet(args.layers))

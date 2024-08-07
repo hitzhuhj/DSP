@@ -5,6 +5,10 @@ from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
 from cifar_model import *
 import argparse
+import pickle
+from sympy.abc import x
+from sympy import Poly
+import math
 def warn(*args, **kwargs):
     pass
 import warnings
@@ -26,6 +30,30 @@ parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float, metavar=
 args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"]=args.device
 
+h0 = 1
+h1 = x
+h2 = (x**2 - 1)/math.sqrt(math.factorial(2))
+h3 = (x**3 - 3*x)/math.sqrt(math.factorial(3))
+h4 = (x**4 - 6*x**2 + 3)/math.sqrt(math.factorial(4))
+h5 = (x**5 - 10*x**3 +15*x)/math.sqrt(math.factorial(5))
+h6 = (x**6 - 15*x**4 + 45*x**2 -15)/math.sqrt(math.factorial(6))
+h7 = (x**7 - 21*x**5 + 105*x**3 - 105*x)/math.sqrt(math.factorial(7))
+h8 = (x**8 - 28*x**6 + 210*x**4 - 420*x**2 + 105)/math.sqrt(math.factorial(8))
+h9 = (x**9 - 36*x**7 + 378*x**5 - 1260*x**3 + 945*x)/math.sqrt(math.factorial(9))
+h10 = (x**10 - 45*x**8 + 630*x**6 - 3150*x**4 + 4725*x**2 -945)/math.sqrt(math.factorial(10))
+H_list = [h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10]
+
+def load_variavle(filename):
+    f = open(filename,"rb")
+    r = pickle.load(f)
+    f.close()
+    return r
+
+def hermite_act(order, hermite_params):
+    temp = 0
+    for i in range(order+1):
+        temp += hermite_params[i]*H_list[i]
+    return Poly(temp, x)
 
 def get_lr(optimizer):
     return [param_group['lr'] for param_group in optimizer.param_groups]
@@ -45,7 +73,7 @@ def warmup(optimizer, lr, epoch):
 device = torch.device("cuda")
 
 def train(filename, network):
-    train_dataset = dsets.CIFAR10(root='./dataset',
+    train_dataset = dsets.CIFAR10(root='/home/zhuhongjia/SSD/cifar10/',
                                   train=True,
                                   download=True,
                                   transform=transforms.Compose([
@@ -58,7 +86,7 @@ def train(filename, network):
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                                batch_size=args.batch_size, num_workers=args.workers,
                                                shuffle=True, drop_last=True)
-    test_dataset = dsets.CIFAR10(root='./dataset',
+    test_dataset = dsets.CIFAR10(root='/home/zhuhongjia/SSD/cifar10/',
                                train=False,
                                transform=transforms.Compose([
                                     transforms.ToTensor(),
@@ -68,6 +96,7 @@ def train(filename, network):
     test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
                                               batch_size=args.batch_size, num_workers=args.workers,
                                               shuffle=False)
+
 
     cnn, netname = network
     config = netname
@@ -127,7 +156,9 @@ def train(filename, network):
     return bestacc
 
 def resnet(layers):
-    return CifarResNet(ResNetBasicblock, layers, 10).to(device), "resnet"+str(layers)
+    hermite_fit_params_path = '/home/zhuhongjia/SSD/D2B/relu/2orderHermite_relu_4.pkl'
+    hermite_params = load_variavle(hermite_fit_params_path)
+    return CifarResNet(ResNetBasicblock, layers, 10, hermite_params).to(device), "resnet"+str(layers)
 
 if __name__ == '__main__':
     train('resnet%d.pkl'%(args.layers,), resnet(args.layers))

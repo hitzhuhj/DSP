@@ -276,11 +276,17 @@ class PruneWrapper(nn.Module):
     def set_arch_hard(self, layer):
         index = layer.group.max(dim=0, keepdim=True)[1]
         layer.prob = torch.zeros_like(layer.group).scatter_(0, index, 1.0)
+        #layer.prob = torch.ones_like(layer.group).scatter_(0, index, 1.0)
             
     @torch.no_grad()
     def find_mask(self, layer):
         layer.mask.fill_(1)
         importance = layer.weight.data**2
+
+        #importance = torch.abs(layer.weight.data)
+        # min_val = importance.min()
+        # max_val = importance.max()
+        # importance = (importance - min_val) / (max_val - min_val + 1e-12)
             
         imp = torch.stack([((p.view(-1,1,1,1)**2)*importance).sum(dim=(3,2,0)) for p in layer.prob],dim=0)
         imp = imp/(imp.sum(dim=1,keepdim=True)+1e-12)
@@ -295,6 +301,11 @@ class PruneWrapper(nn.Module):
     @torch.no_grad()
     def find_mask_fp(self, layer):
         importance = layer.weight.data**2
+        
+        #importance = torch.abs(layer.weight.data)
+        # min_val = importance.min()
+        # max_val = importance.max()
+        # importance = (importance - min_val) / (max_val - min_val + 1e-12)
             
         imp = importance.sum(dim=(3,2,1))
         imp = imp/(imp.sum()+1e-12)
@@ -324,7 +335,7 @@ class PruneWrapper(nn.Module):
         if self.rank==0:
             print(*args)
             
-    def initialize(self, rate, n_iter=10):
+    def initialize(self, rate, n_iter=20):
         self.print("="*80)
         self.print("Finding pruning settings to achieve the target pruning rate")
         self.print("="*80)
@@ -334,40 +345,43 @@ class PruneWrapper(nn.Module):
         lower, upper = 0, 1.
         for _ in range(n_iter):
             pflops, pparams = self.prune()
-            if pflops>rate*100:
+            if pflops > rate*100:
                 temp = self.beta
+                #self.beta = 0.8 * self.beta #(self.beta+lower)/2
                 self.beta = (self.beta+lower)/2
                 upper = temp
             else:
                 temp = self.beta
+                #self.beta = 1.2 * self.beta #(self.beta+upper)/2
                 self.beta = (self.beta+upper)/2
                 lower = temp
             self.model.load_state_dict(checkpoints)
         pflops, pparams = self.prune(True)
         return pflops, pparams
     
-    def prune(self, verbose=False):
+    def prune(self, verbose=True):
         self.apply(self.find_mask, self.layers)
         self.apply(self.find_mask_fp, self.fp_layers)
         self.apply(self.apply_mask, self.layers)
-        for _ in range(125):
-            out = self.model(torch.randn(80, 3, 32, 32).cuda())
-            F.cross_entropy(out, torch.randint(0, out.size(1), (80,)).cuda()).backward()
+        # for _ in range(30):
+        #     out = self.model(torch.randn(80, 3, 32, 32).cuda())
+        #     F.cross_entropy(out, torch.randint(0, out.size(1), (80,)).cuda()).backward()
             
-        # remove dead filters by tracking zero gradients
-        with torch.no_grad():
-            for m in self.model.modules():
-                if isinstance(m, nn.Conv2d):
-                    m.weight.mul_((m.weight.grad.abs().sum(dim=(3,2,1), keepdim=True)>0).float())
-                    m.weight.mul_((m.weight.grad.abs().sum(dim=(3,2,0), keepdim=True)>0).float())
-                    if hasattr(m, 'mask'):
-                        m.mask.mul_((m.weight.grad.abs().sum(dim=(3,2,1), keepdim=True)>0).float())
-                        m.mask.mul_((m.weight.grad.abs().sum(dim=(3,2,0), keepdim=True)>0).float())
-                elif isinstance(m, nn.BatchNorm2d):
-                    m.weight.mul_((m.weight.grad.abs()>0).float())
-                    m.bias.mul_((m.weight.grad.abs()>0).float())
+        # # remove dead filters by tracking zero gradients
+        # with torch.no_grad():
+        #     for m in self.model.modules():
+        #         if isinstance(m, nn.Conv2d):
+        #             m.weight.mul_((m.weight.grad.abs().sum(dim=(3,2,1), keepdim=True)>0).float())
+        #             m.weight.mul_((m.weight.grad.abs().sum(dim=(3,2,0), keepdim=True)>0).float())
+        #             if hasattr(m, 'mask'):
+        #                 m.mask.mul_((m.weight.grad.abs().sum(dim=(3,2,1), keepdim=True)>0).float())
+        #                 m.mask.mul_((m.weight.grad.abs().sum(dim=(3,2,0), keepdim=True)>0).float())
+        #         elif isinstance(m, nn.BatchNorm2d):
+        #             m.weight.mul_((m.weight.grad.abs()>0).float())
+        #             m.bias.mul_((m.weight.grad.abs()>0).float())
                     
-            pflops, pparams=self.summary(verbose)
+        #     pflops, pparams=self.summary(verbose)
+        pflops, pparams=self.summary(verbose)
         self.model.zero_grad(True)
             
         return pflops, pparams
